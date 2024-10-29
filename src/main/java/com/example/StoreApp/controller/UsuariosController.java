@@ -171,7 +171,7 @@ public class UsuariosController {
     }
 
     @PostMapping("/{userId}/despachos")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasRole('ADMIN') or @usuariosService.isCurrentUser(#id)")
     public ResponseEntity<?> addDespachoToUser(@PathVariable Long userId, @RequestBody Despacho despacho) {
         try {
             Usuario updatedUser = usuariosService.addDespachoToUser(userId, despacho);
