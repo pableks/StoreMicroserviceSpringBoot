@@ -7,6 +7,8 @@ import org.springframework.hateoas.server.mvc.WebMvcLinkBuilder;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.*;
@@ -22,6 +24,7 @@ import com.example.StoreApp.model.Usuario;
 import com.example.StoreApp.service.AuthService;
 import com.example.StoreApp.service.UsuariosService;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -170,24 +173,110 @@ public class UsuariosController {
         }
     }
 
-    @PostMapping("/{userId}/despachos")
-    @PreAuthorize("hasRole('ADMIN') or @usuariosService.isCurrentUser(#id)")
-    public ResponseEntity<?> addDespachoToUser(@PathVariable Long userId, @RequestBody Despacho despacho) {
+
+    @PostMapping("/me/despachos")
+    public ResponseEntity<?> addDespachoToCurrentUser(@Valid @RequestBody Despacho despacho) {
         try {
-            Usuario updatedUser = usuariosService.addDespachoToUser(userId, despacho);
-            return ResponseEntity.ok(updatedUser);
-        } catch (usuariosNotFoundException e) {
-            log.error("User not found with ID {}: {}", userId, e.getMessage());
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ErrorResponse(false, "User not found"));
+            Usuario currentUser = authService.getCurrentUser();
+            if (currentUser == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new ApiResponse(false, "Usuario no autenticado"));
+            }
+            
+            // Crear y configurar el nuevo despacho
+            Despacho nuevoDespacho = new Despacho();
+            nuevoDespacho.setDireccion(despacho.getDireccion());
+            nuevoDespacho.setActivo(despacho.isActivo());
+            
+            // Agregar el despacho al usuario actual
+            Usuario updatedUser = usuariosService.addDespachoToUser(currentUser.getId(), nuevoDespacho);
+            
+            // Limpiar datos sensibles antes de devolver
+            updatedUser.setPassword(null);
+            
+            return ResponseEntity.status(HttpStatus.CREATED)
+                .body(new ApiResponse(true, "Despacho agregado exitosamente", updatedUser));
+                
+        } catch (RuntimeException e) {
+            log.error("Error al agregar despacho: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(new ApiResponse(false, e.getMessage()));
         } catch (Exception e) {
-            log.error("Failed to add despacho to user with ID {}: {}", userId, e.getMessage(), e);
+            log.error("Error inesperado al agregar despacho: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(new ErrorResponse(false, "Failed to add despacho"));
+                .body(new ApiResponse(false, "Error interno al agregar despacho"));
+        }
+    }
+
+    @GetMapping("/me/despachos")
+    public ResponseEntity<?> getCurrentUserDespachos() {
+        try {
+            Usuario currentUser = authService.getCurrentUser();
+            if (currentUser == null) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new ApiResponse(false, "Usuario no autenticado"));
+            }
+
+            List<Despacho> despachos = currentUser.getDespachos();
+            if (despachos == null || despachos.isEmpty()) {
+                return ResponseEntity.ok(new ApiResponse(true, "No hay despachos registrados", new ArrayList<>()));
+            }
+
+            return ResponseEntity.ok(new ApiResponse(true, "Despachos recuperados exitosamente", despachos));
+        } catch (Exception e) {
+            log.error("Error al obtener despachos del usuario actual: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(new ApiResponse(false, "Error al obtener los despachos"));
+        }
+    }
+
+    @PostMapping("/{userId}/despachos")
+    @PreAuthorize("hasRole('ADMIN') or @usuariosService.isCurrentUser(#userId)")
+    public ResponseEntity<?> addDespachoToUser(@PathVariable Long userId, @Valid @RequestBody Despacho despacho) {
+        log.info("Intentando agregar despacho para usuario ID: {}", userId);
+        
+        try {
+            // Verificar autenticación actual
+            Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+            log.info("Usuario autenticado: {}, Roles: {}", 
+                auth.getName(), 
+                auth.getAuthorities().stream().map(Object::toString).collect(Collectors.joining(", ")));
+            
+            // Validar el usuario actual
+            Usuario currentUser = authService.getCurrentUser();
+            if (currentUser == null) {
+                log.error("No se pudo obtener el usuario actual");
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new ApiResponse(false, "Usuario no autenticado"));
+            }
+            
+            log.info("Usuario actual: {}, ID: {}", currentUser.getUsername(), currentUser.getId());
+            
+            // Crear nuevo despacho
+            Despacho nuevoDespacho = new Despacho();
+            nuevoDespacho.setDireccion(despacho.getDireccion());
+            nuevoDespacho.setActivo(true);
+            
+            Usuario updatedUser = usuariosService.addDespachoToUser(userId, nuevoDespacho);
+            
+            // Limpiar la contraseña antes de devolver la respuesta
+            updatedUser.setPassword(null);
+            
+            return ResponseEntity.status(HttpStatus.CREATED)
+                .body(new ApiResponse(true, "Despacho agregado exitosamente", updatedUser));
+        } catch (RuntimeException e) {
+            log.error("Error al agregar despacho para usuario con ID {}: {}", userId, e.getMessage());
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(new ApiResponse(false, e.getMessage()));
+        } catch (Exception e) {
+            log.error("Error al agregar despacho para usuario con ID {}: {}", userId, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(new ApiResponse(false, "Error al agregar despacho"));
         }
     }
 
     @GetMapping("/{userId}/roles")
-    @PreAuthorize("hasRole('ADMIN') or @usuariosService.isCurrentUser(#userId)")
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse> getRolesForUser(@PathVariable Long userId) {
         try {
             Usuario usuario = usuariosService.getUsuarioById(userId)
